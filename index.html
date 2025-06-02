@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SVG Path Animation to GIF</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      background: #222;
+      color: #eee;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    body {
+      min-height: 100vh;
+      width: 100vw;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+      align-items: center;
+    }
+    #controls {
+      width: 100vw;
+      padding: 32px 0 0 0;
+      background: #18191f;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 16px;
+    }
+    #controls input[type="file"] {
+      color: #fff;
+      background: #156cf7;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 4px;
+      font-size: 16px;
+      cursor: pointer;
+      width: 120px;
+      margin-right: 10px;
+    }
+    #controls label {
+      font-size: 15px;
+      margin-right: 8px;
+    }
+    #exportBtn {
+      background: #1789f7;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 22px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-left: 10px;
+      transition: background 0.2s;
+    }
+    #exportBtn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Centered stack for diagram and GIF preview */
+    .center-stack {
+      width: 100vw;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    #diagram-container {
+      background: #fff;
+      border-radius: 18px;
+      width: 800px;
+      height: 700px;
+      box-shadow: 0 6px 32px #0005;
+      overflow: auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 38px auto 32px auto;
+    }
+    svg {
+      width: 90%;
+      height: 90%;
+      display: block;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 10px;
+    }
+    .arrow-path {
+      cursor: pointer;
+      transition: stroke 0.15s, stroke-width 0.2s;
+    }
+    .highlight-path {
+      stroke-width: 5 !important;
+      stroke: #2196f3 !important;
+      filter: drop-shadow(0 2px 8px #56c9ff55);
+    }
+    .anim-dot {
+      filter: drop-shadow(0 0 6px #ff980099);
+      pointer-events: none;
+    }
+    #gifPreview {
+      display: none;
+      margin: 0 auto 0 auto;
+      border-radius: 16px;
+      background: #222;
+      box-shadow: 0 3px 24px #0007;
+      padding: 16px;
+      max-width: 500px;
+      width: 400px;
+      height: 400px;
+      object-fit: contain;
+    }
+    #exportStatus {
+      display: none;
+      font-weight: bold;
+      color: #2196f3;
+      text-align: center;
+      margin-bottom: 20px;
+      letter-spacing: 1px;
+    }
+    @media (max-width: 1000px) {
+      #diagram-container { width: 97vw; height: 62vw; min-height: 340px; }
+      #gifPreview { width: 90vw; max-width: 90vw; }
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input type="file" accept=".svg" id="uploadBtn">
+    <button id="exportBtn" disabled>Export GIF</button>
+  </div>
+  <div class="center-stack">
+    <div id="exportStatus">Exporting GIF... please wait</div>
+    <div id="diagram-container"></div>
+    <img id="gifPreview">
+  </div>
+  <!-- Scripts -->
+  <script src="anime.min.js"></script>
+  <script src="gif.js"></script>
+  <script>
+    // Config
+    const config = {
+      dotRadius: 14,
+      dotColor: "#ff9800",
+      dotStroke: "#fff",
+      dotStrokeWidth: 4,
+      pathSelector: "path"
+    };
+    let svgSource = null;
+    let animatedDots = []; // {pathIdx, isBidir, pathRef, dot, anim}
+
+    function isBidirectional(path) {
+      const mStart = path.getAttribute('marker-start');
+      const mEnd = path.getAttribute('marker-end');
+      return mStart && mEnd;
+    }
+
+    function animateLoadedSVG(svg) {
+      let paths = svg.querySelectorAll(config.pathSelector);
+      animatedDots = []; // Reset
+
+      paths.forEach((p, i) => {
+        p.classList.add('arrow-path');
+        const bidir = isBidirectional(p);
+        p.setAttribute('stroke', bidir ? "#FF69B4" : "#1E90FF");
+        p.setAttribute('stroke-width', 2);
+
+        p.addEventListener('mouseover', () =>
+          p.setAttribute('stroke', bidir ? "#FFB5F6" : "#44f")
+        );
+        p.addEventListener('mouseout', () => {
+          if (!animatedDots.find(ad => ad.pathIdx === i))
+            p.setAttribute('stroke', bidir ? "#FF69B4" : "#1E90FF");
+        });
+
+        // On click, toggle animation dot on this path
+        p.addEventListener('click', () => {
+          const dotIdx = animatedDots.findIndex(ad => ad.pathIdx === i);
+          if (dotIdx >= 0) {
+            // Remove animation
+            animatedDots[dotIdx].anim.pause();
+            animatedDots[dotIdx].dot.remove();
+            animatedDots.splice(dotIdx, 1);
+            p.classList.remove('highlight-path');
+            p.setAttribute('stroke', bidir ? "#FF69B4" : "#1E90FF");
+          } else {
+            // Add animation
+            p.classList.add('highlight-path');
+            let dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            dot.setAttribute('r', config.dotRadius);
+            dot.setAttribute('class', 'anim-dot');
+            dot.setAttribute('fill', config.dotColor);
+            dot.setAttribute('stroke', config.dotStroke);
+            dot.setAttribute('stroke-width', config.dotStrokeWidth);
+            let dotId = `anim-dot-${Math.random().toString(36).slice(2,9)}`;
+            dot.setAttribute('id', dotId);
+            p.parentNode.appendChild(dot);
+
+            let flowPath = anime.path(p);
+            let anim = anime({
+              targets: `#${dotId}`,
+              translateX: flowPath('x'),
+              translateY: flowPath('y'),
+              easing: 'linear',
+              duration: 2000,
+              loop: true,
+              direction: bidir ? 'alternate' : 'normal',
+              update: function(anim) {
+                if (!bidir && anim.progress > 99) {
+                  setTimeout(() => { anim.restart(); }, 1);
+                }
+              }
+            });
+            animatedDots.push({ pathIdx: i, isBidir: bidir, pathRef: p, dot, anim });
+          }
+        });
+      });
+    }
+
+    function injectSVG(svgText) {
+      document.getElementById('diagram-container').innerHTML = svgText;
+      let svg = document.querySelector('#diagram-container svg');
+      svgSource = svg; // for export
+      animateLoadedSVG(svg);
+      document.getElementById('exportBtn').disabled = false;
+    }
+
+    // Upload SVG
+    document.getElementById('uploadBtn').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        injectSVG(evt.target.result);
+      };
+      reader.readAsText(file);
+    });
+
+    // --- EXPORT TO GIF ---
+    document.getElementById('exportBtn').addEventListener('click', function() {
+      document.getElementById('exportStatus').style.display = 'block';
+      document.getElementById('exportBtn').disabled = true;
+      if (!svgSource) return;
+
+      const svgNode = svgSource;
+      const width = svgNode.width.baseVal.value || 800;
+      const height = svgNode.height.baseVal.value || 800;
+      let canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      let ctx = canvas.getContext('2d');
+
+      let svgCopy = svgNode.cloneNode(true);
+      svgCopy.setAttribute('width', width);
+      svgCopy.setAttribute('height', height);
+
+      // Remove highlights for GIF
+      svgCopy.querySelectorAll('.highlight-path').forEach(e => {
+        e.classList.remove('highlight-path');
+        e.setAttribute('stroke', "#1E90FF");
+      });
+
+      // Use animatedDots array for the GIF, not live DOM!
+      const totalFrames = 32; // change for longer/shorter GIFs
+      const gif = new GIF({
+        workers: 2, quality: 10, width, height,
+        workerScript: "gif.worker.js"
+      });
+
+      let step = 0;
+      function renderFrame(cb) {
+        // Remove all dots in copy
+        svgCopy.querySelectorAll('.anim-dot').forEach(e => e.remove());
+
+        animatedDots.forEach((ad, i) => {
+          let path = svgCopy.querySelectorAll(config.pathSelector)[ad.pathIdx];
+          if (!path) return;
+          let totalLength = path.getTotalLength();
+          let t = (step / totalFrames) % 1;
+          let direction = (ad.isBidir ? (Math.floor((step / totalFrames)) % 2 === 0 ? 1 : -1) : 1);
+          let localT = direction === 1 ? t : 1 - t;
+          let pt = path.getPointAtLength(localT * totalLength);
+          let dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+          dot.setAttribute('r', config.dotRadius);
+          dot.setAttribute('class', 'anim-dot');
+          dot.setAttribute('fill', config.dotColor);
+          dot.setAttribute('stroke', config.dotStroke);
+          dot.setAttribute('stroke-width', config.dotStrokeWidth);
+          dot.setAttribute('cx', pt.x);
+          dot.setAttribute('cy', pt.y);
+          path.parentNode.appendChild(dot);
+        });
+
+        let svgStr = new XMLSerializer().serializeToString(svgCopy);
+        let img = new window.Image();
+        let svg64 = 'data:image/svg+xml;base64,' + window.btoa(unescape(encodeURIComponent(svgStr)));
+        img.onload = function() {
+          ctx.clearRect(0, 0, width, height);
+          ctx.drawImage(img, 0, 0);
+          gif.addFrame(ctx, {copy: true, delay: 1000 / 24});
+          cb();
+        };
+        img.src = svg64;
+      }
+
+      function renderNextFrame() {
+        if (step >= totalFrames) {
+          gif.on('finished', function(blob) {
+            let url = URL.createObjectURL(blob);
+            let gifPreview = document.getElementById('gifPreview');
+            gifPreview.src = url;
+            gifPreview.style.display = "block";
+            document.getElementById('exportStatus').style.display = 'none';
+            document.getElementById('exportBtn').disabled = false;
+          });
+          gif.render();
+          return;
+        }
+        renderFrame(() => {
+          step++;
+          requestAnimationFrame(renderNextFrame);
+        });
+      }
+
+      renderNextFrame();
+    });
+  </script>
+</body>
+</html>
